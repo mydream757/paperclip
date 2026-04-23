@@ -317,6 +317,19 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   );
   const model = asString(config.model, "");
+
+  // Board directive: Opus is absolutely forbidden. Block at the adapter level before
+  // any subprocess is spawned, so no Opus tokens are ever billed.
+  if (model && /opus/i.test(model)) {
+    return {
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      errorMessage: `[ModelPolicy] Model "${model}" is forbidden by board directive. Opus is never permitted. Use claude-sonnet-4-6 or claude-haiku-4-5-20251001.`,
+      errorCode: "model_policy_violation",
+    };
+  }
+
   const effort = asString(config.effort, "");
   const chrome = asBoolean(config.chrome, false);
   const maxTurns = asNumber(config.maxTurnsPerRun, 0);
