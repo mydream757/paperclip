@@ -4525,6 +4525,32 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (reaped.length > 0) {
       logger.warn({ reapedCount: reaped.length, runIds: reaped }, "reaped orphaned heartbeat runs");
     }
+
+    // Reset agents stuck in "running" with no corresponding running heartbeat_run.
+    // This covers the gap where a run was marked done but finalizeAgentStatus failed silently.
+    const resetZombies = await db.execute(sql`
+      UPDATE agents
+      SET status = 'idle', updated_at = NOW()
+      WHERE status = 'running'
+        AND id NOT IN (
+          SELECT DISTINCT agent_id FROM heartbeat_runs WHERE status = 'running'
+        )
+        AND status NOT IN ('paused', 'terminated')
+      RETURNING id
+    `);
+    const zombieRows = Array.isArray(resetZombies) ? resetZombies : [];
+    const zombieIds = zombieRows.map((r: Record<string, unknown>) => r.id as string);
+    if (zombieIds.length > 0) {
+      logger.warn({ agentIds: zombieIds }, "reset zombie agents stuck in running with no active run");
+      for (const agentId of zombieIds) {
+        publishLiveEvent({
+          companyId: (await getAgent(agentId))?.companyId ?? "",
+          type: "agent.status",
+          payload: { agentId, status: "idle", lastHeartbeatAt: null, outcome: "failed" },
+        });
+      }
+    }
+
     return { reaped: reaped.length, runIds: reaped };
   }
 
